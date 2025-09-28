@@ -366,7 +366,49 @@
     
     const allFixes = [...aFix, ...fFix];
 
-    return {analysisPts,forecastPts,forecastSmooth,coloredSegs,currentRings,forecastRings,fFix,probEnvelope,allFixes,currentPointFeature, rawInterpolatedPath: allFixes, cwaCurrentTime: current.time};
+    const animatedPath = [...aFix];
+    const forecastPointsWithTime = [current, ...fFix];
+
+    if (forecastPointsWithTime.length > 1 && forecastSmooth.length > 1) {
+        const forecastStartTime = forecastPointsWithTime[0].time.getTime();
+        const forecastEndTime = forecastPointsWithTime[forecastPointsWithTime.length - 1].time.getTime();
+        const forecastDuration = forecastEndTime - forecastStartTime;
+
+        if (forecastDuration > 0) {
+            const numSmoothSegments = forecastSmooth.length - 1;
+
+            for (let i = 1; i < forecastSmooth.length; i++) {
+                const progress = i / numSmoothSegments;
+                const timeMs = forecastStartTime + forecastDuration * progress;
+                const [lon, lat] = forecastSmooth[i];
+
+                const originalProgress = progress * (forecastPointsWithTime.length - 1);
+                const pt1_idx = Math.floor(originalProgress);
+                const pt2_idx = Math.min(pt1_idx + 1, forecastPointsWithTime.length - 1);
+                const t_inter = originalProgress - pt1_idx;
+
+                const pt1 = forecastPointsWithTime[pt1_idx];
+                const pt2 = forecastPointsWithTime[pt2_idx];
+                
+                const r15 = (pt1.r15 || 0) + ((pt2.r15 || 0) - (pt1.r15 || 0)) * t_inter;
+                const r25 = (pt1.r25 || 0) + ((pt2.r25 || 0) - (pt1.r25 || 0)) * t_inter;
+
+                animatedPath.push({
+                    time: new Date(timeMs),
+                    lon: lon,
+                    lat: lat,
+                    r15: r15,
+                    r25: r25
+                });
+            }
+        } else {
+            animatedPath.push(...fFix);
+        }
+    } else {
+        animatedPath.push(...fFix);
+    }
+
+    return {analysisPts,forecastPts,forecastSmooth,coloredSegs,currentRings,forecastRings,fFix,probEnvelope,allFixes,currentPointFeature, rawInterpolatedPath: animatedPath, cwaCurrentTime: current.time};
 
     function readRadius(circle){
       if(!circle) return null;
@@ -929,8 +971,13 @@
 
     slider.addEventListener('input', (e) => {
         if (!animationState.isPlaying) {
-            const time = new Date(parseInt(e.target.value, 10));
-            animationState.pausedElapsed = time.getTime() - globalMinTime.getTime();
+            const timeMs = parseInt(e.target.value, 10);
+            const time = new Date(timeMs);
+            const timeRange = globalMaxTime.getTime() - globalMinTime.getTime();
+            if (timeRange > 0) {
+                const progress = (timeMs - globalMinTime.getTime()) / timeRange;
+                animationState.pausedElapsed = progress * totalDuration;
+            }
             updateTyphoonVisuals(time);
             updateTownshipHighlightForAnimation(time);
         }
@@ -950,10 +997,21 @@
         setControlsDisabled(false);
       } else { // PLAY
         if (!hasTime) return;
-        if (parseInt(slider.value, 10) >= parseInt(slider.max, 10)) { // If at the end, restart
-            slider.value = slider.min;
+        
+        let startTimeMs = parseInt(slider.value, 10);
+        if (startTimeMs >= parseInt(slider.max, 10)) { // If at the end, restart
+            startTimeMs = parseInt(slider.min, 10);
+            slider.value = String(startTimeMs);
+        }
+
+        const timeRange = globalMaxTime.getTime() - globalMinTime.getTime();
+        if (timeRange > 0) {
+            const progress = (startTimeMs - globalMinTime.getTime()) / timeRange;
+            animationState.pausedElapsed = progress * totalDuration;
+        } else {
             animationState.pausedElapsed = 0;
         }
+
         playPauseBtn.textContent = '暫停';
         setControlsDisabled(true);
         animationState.isPlaying = true;
