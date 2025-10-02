@@ -54,7 +54,92 @@
     #timeline-panel label{font-size:12px;color:var(--muted);min-width:110px;text-align:center}
     #timeline-slider{width:220px}
 
-    /* Eye buttons */
+    #dashboard-panel {
+      position: absolute;
+      top: 64px;
+      right: 12px; 
+      left: auto; 
+      display: none; 
+      flex-direction: column; 
+      width: 300px;
+      max-height: calc(100vh - 80px); 
+      overflow-y: auto;
+      z-index: 20;
+    }    #dashboard-handle {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 50px;
+      height: 50px;
+      cursor: move;
+      z-index: 21;
+    }
+    .dashboard-item {
+      padding: 14px 18px;
+      border-radius: 14px;
+      box-shadow: 0 6px 20px rgba(0,0,0,.3);
+      border: 2px solid; /* Color will be set by JS */
+      text-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    }
+    .dashboard-item h5 {
+      margin: 0 0 12px 0;
+      font-size: 19px;
+      font-weight: 700;
+      color: #fff;
+      padding-bottom: 8px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+      text-align: center;
+    }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px 2px;
+      text-align: center;
+    }
+    .stat-item {
+      display: flex;
+      flex-direction: column;
+      padding: 2px 0;
+    }    .stat-item.full-width {
+      grid-column: 1 / -1;
+    }
+    .stat-item span {
+      font-size: 14px;
+      color: var(--muted);
+      margin-bottom: 2px;
+    }
+.stat-item strong {
+  font-size: 22px;
+  color: var(--fg);
+  font-weight: 600;
+  line-height: 1.2;
+}
+.chart-container {
+  position: relative;
+  width: 100%;
+  height: 60px;
+  margin-top: 12px;
+  background-color: rgba(0,0,0,0.15);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 4px;
+}
+.chart-container svg {
+  width: 100%;
+  height: 100%;
+}
+.chart-path {
+  stroke-width: 2;
+  fill: none;
+}
+.chart-marker {
+  stroke-width: 1.5;
+  stroke: var(--brand);
+}
+.chart-label {
+  font-size: 11px;
+  fill: var(--muted);
+}
     .icon-btn{
       all:unset;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;
       width:28px;height:28px;border-radius:999px;border:1px solid var(--btn-border);background:var(--btn-bg);
@@ -65,6 +150,27 @@
     #panelToggleFloating{
       position:absolute;left:12px;top:12px;z-index:11;display:none;
       box-shadow:0 4px 14px rgba(0,0,0,.35);
+    }
+    #speed-control-panel {
+      position: absolute;
+      bottom: 12px;
+      right: 12px;
+      z-index: 10;
+      padding: 6px 10px;
+      gap: 8px;
+      align-items: center;
+    }
+    #speed-control-panel label {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    #speed-slider {
+      width: 100px;
+    }
+    #speed-label {
+      font-size: 12px;
+      color: var(--muted);
+      width: 30px; /* Fixed width for alignment */
     }
   </style>
 </head>
@@ -144,6 +250,15 @@
       <div class="chip"><span class="sw sw-7f"></span><span>預測 7級（藍）</span></div>
       <div class="chip"><span class="sw sw-10f"></span><span>預測 10級（綠）</span></div>
     </div>
+  </div>
+
+  <div id="dashboard-panel" class="panel">
+  </div>
+
+  <div id="speed-control-panel" class="card row">
+    <label for="speed-slider">速度</label>
+    <input type="range" id="speed-slider" min="0.25" max="4" step="0.25" value="1">
+    <span id="speed-label">1.00x</span>
   </div>
 
   <script>
@@ -313,12 +428,19 @@
 
   function parseCWA(ty){
     const fixTimeToDate=(t)=>new Date(t);
+    const interpolate = (v1, v2, t) => {
+      const val1 = v1 == null ? 0 : v1;
+      const val2 = v2 == null ? 0 : v2;
+      if (val1 === 0 && val2 === 0) return null;
+      return val1 + (val2 - val1) * t;
+    };
 
     const aFix=ty.analysis_data.fix.map(f=>({
       time:fixTimeToDate(f.fix_time),
       lon:+f.coordinate.split(',')[0],
       lat:+f.coordinate.split(',')[1],
       vmax:f.max_wind_speed?+f.max_wind_speed:null,
+      gust:f.max_gust_speed?+f.max_gust_speed:null,
       p:f.pressure?+f.pressure:null,
       r15:readRadius(f.circle_of_15ms),
       r25:readRadius(f.circle_of_25ms)
@@ -331,6 +453,7 @@
       lon:+f.coordinate.split(',')[0],
       lat:+f.coordinate.split(',')[1],
       vmax:+f.max_wind_speed,
+      gust:+f.max_gust_speed,
       p:+f.pressure,
       r15:readRadius(f.circle_of_15ms),
       r25:readRadius(f.circle_of_25ms),
@@ -341,6 +464,30 @@
     const current=aFix[aFix.length-1];
     const forecastCoords=fFix.map(p=>[p.lon,p.lat]);
     const forecastSmooth=smoothLine([[current.lon,current.lat],...forecastCoords],SMOOTH_SAMPLES);
+
+    const forecastColoredSegs = [];
+    const forecastPoints = [current, ...fFix];
+    if (forecastSmooth.length > 1) {
+        for (let i = 0; i < forecastPoints.length - 1; i++) {
+            const startPoint = forecastPoints[i];
+            const cls = classifyWind(startPoint.vmax);
+            const startIndex = i * SMOOTH_SAMPLES;
+            const endIndex = Math.min((i + 1) * SMOOTH_SAMPLES, forecastSmooth.length - 1);
+            
+            const segmentCoords = forecastSmooth.slice(startIndex, endIndex + 1);
+            
+            if (segmentCoords.length > 1) {
+                forecastColoredSegs.push({
+                    type: 'Feature',
+                    geometry: {
+                        type: 'LineString',
+                        coordinates: segmentCoords
+                    },
+                    properties: { cls: cls }
+                });
+            }
+        }
+    }
 
     const coloredSegs=[];
     for(let i=0;i<aFix.length-1;i++){
@@ -370,45 +517,40 @@
     const forecastPointsWithTime = [current, ...fFix];
 
     if (forecastPointsWithTime.length > 1 && forecastSmooth.length > 1) {
-        const forecastStartTime = forecastPointsWithTime[0].time.getTime();
-        const forecastEndTime = forecastPointsWithTime[forecastPointsWithTime.length - 1].time.getTime();
-        const forecastDuration = forecastEndTime - forecastStartTime;
+        for (let i = 0; i < forecastPointsWithTime.length - 1; i++) {
+            const pt1 = forecastPointsWithTime[i];
+            const pt2 = forecastPointsWithTime[i+1];
+            const t1 = pt1.time.getTime();
+            const t2 = pt2.time.getTime();
+            const segmentDuration = t2 - t1;
 
-        if (forecastDuration > 0) {
-            const numSmoothSegments = forecastSmooth.length - 1;
+            const smoothSegmentStartIndex = i * SMOOTH_SAMPLES;
+            
+            for (let j = 1; j <= SMOOTH_SAMPLES; j++) {
+                const smoothPointIndex = smoothSegmentStartIndex + j;
+                if (smoothPointIndex >= forecastSmooth.length) continue;
 
-            for (let i = 1; i < forecastSmooth.length; i++) {
-                const progress = i / numSmoothSegments;
-                const timeMs = forecastStartTime + forecastDuration * progress;
-                const [lon, lat] = forecastSmooth[i];
-
-                const originalProgress = progress * (forecastPointsWithTime.length - 1);
-                const pt1_idx = Math.floor(originalProgress);
-                const pt2_idx = Math.min(pt1_idx + 1, forecastPointsWithTime.length - 1);
-                const t_inter = originalProgress - pt1_idx;
-
-                const pt1 = forecastPointsWithTime[pt1_idx];
-                const pt2 = forecastPointsWithTime[pt2_idx];
-                
-                const r15 = (pt1.r15 || 0) + ((pt2.r15 || 0) - (pt1.r15 || 0)) * t_inter;
-                const r25 = (pt1.r25 || 0) + ((pt2.r25 || 0) - (pt1.r25 || 0)) * t_inter;
+                const [lon, lat] = forecastSmooth[smoothPointIndex];
+                const t_inter = j / SMOOTH_SAMPLES;
+                const timeMs = t1 + segmentDuration * t_inter;
 
                 animatedPath.push({
                     time: new Date(timeMs),
                     lon: lon,
                     lat: lat,
-                    r15: r15,
-                    r25: r25
+                    r15: interpolate(pt1.r15, pt2.r15, t_inter),
+                    r25: interpolate(pt1.r25, pt2.r25, t_inter),
+                    vmax: interpolate(pt1.vmax, pt2.vmax, t_inter),
+                    gust: interpolate(pt1.gust, pt2.gust, t_inter),
+                    p: interpolate(pt1.p, pt2.p, t_inter)
                 });
             }
-        } else {
-            animatedPath.push(...fFix);
         }
     } else {
         animatedPath.push(...fFix);
     }
 
-    return {analysisPts,forecastPts,forecastSmooth,coloredSegs,currentRings,forecastRings,fFix,probEnvelope,allFixes,currentPointFeature, rawInterpolatedPath: animatedPath, cwaCurrentTime: current.time};
+    return {analysisPts,forecastPts,forecastColoredSegs,coloredSegs,currentRings,forecastRings,fFix,probEnvelope,allFixes,currentPointFeature, rawInterpolatedPath: animatedPath, cwaCurrentTime: current.time, typhoon_name: ty.typhoon_name, cwa_typhoon_name: ty.cwa_typhoon_name};
 
     function readRadius(circle){
       if(!circle) return null;
@@ -451,7 +593,7 @@
   };
 
   let labelsOn=true,enabledKeys=new Set(),currentTheme='dark';
-  let isAnimationMode=false,labelSize=30,map,isCameraLocked=false,townshipAnimationPlayer=null;
+  let isAnimationMode=false,labelSize=30,map,isCameraLocked=false,townshipAnimationPlayer=null,animationSpeed=1;
   let animationState = { handle: null, animationStartTs: 0, pausedElapsed: 0, isPlaying: false, globalMinTime: null, globalMaxTime: null };
   let selectedCounties=new Set(), selectedInterestCounties = new Set();
   let allTownFeatures=[],sweptPolygons={r7:null,r10:null};
@@ -506,7 +648,7 @@
         selectedStormIndices.add(0);
     }
 
-    map = new maplibregl.Map(darkMapStyle);
+    map = new maplibregl.Map({ ...darkMapStyle, attributionControl: false });
     initMap();
 
     map.on('load', () => {
@@ -539,7 +681,9 @@
         });
 
         const label = document.createElement('label');
-        label.textContent = `${storm.typhoon_name} (${storm.cwa_typhoon_name})`;
+        const name = storm.typhoon_name || '熱帶低氣壓';
+        const cwa_name = storm.cwa_typhoon_name || '';
+        label.textContent = cwa_name ? `${name} (${cwa_name})` : name;
         label.setAttribute('for', cb.id);
 
         item.appendChild(cb); item.appendChild(label); container.appendChild(item);
@@ -555,7 +699,7 @@
     const allForecastRings = [];
     const allProbEnvelopes = [];
     const allCurrentPoints = [];
-    const allForecastLines = [];
+    const allForecastColoredSegs = [];
 
     selectedStormIndices.forEach(index => {
         const stormData = allStorms[index];
@@ -571,8 +715,8 @@
         allForecastRings.push(...cache.forecastRings);
         if (cache.probEnvelope) allProbEnvelopes.push(cache.probEnvelope);
         if (cache.currentPointFeature) allCurrentPoints.push(cache.currentPointFeature);
-        if (cache.forecastSmooth && cache.forecastSmooth.length > 0) {
-            allForecastLines.push({type: 'Feature', geometry: {type: 'LineString', coordinates: cache.forecastSmooth}, properties: {typhoonIndex: index}});
+        if (cache.forecastColoredSegs) {
+            allForecastColoredSegs.push(...cache.forecastColoredSegs);
         }
     });
 
@@ -596,7 +740,7 @@
     }
 
     map.getSource('segAnalysis').setData({type:'FeatureCollection', features: allColoredSegs});
-    map.getSource('forecastLine').setData({type:'FeatureCollection', features: allForecastLines});
+    map.getSource('segForecast').setData({type:'FeatureCollection', features: allForecastColoredSegs});
     map.getSource('pts-past').setData({type:'FeatureCollection', features: allAnalysisPts});
     map.getSource('pts-current').setData({type:'FeatureCollection', features: allCurrentPoints});
     map.getSource('pts-forecast').setData({type:'FeatureCollection', features: allForecastPts});
@@ -686,7 +830,7 @@
 
       const emptyFC = {type:'FeatureCollection',features:[]};
       map.addSource('segAnalysis',{type:'geojson',data:emptyFC});
-      map.addSource('forecastLine',{type:'geojson',data:emptyFC});
+      map.addSource('segForecast',{type:'geojson',data:emptyFC});
       map.addSource('pts-past',{type:'geojson',data:emptyFC});
       map.addSource('pts-current',{type:'geojson',data:emptyFC});
       map.addSource('pts-forecast',{type:'geojson',data:emptyFC});
@@ -716,7 +860,10 @@
       map.addLayer({id:'seg-moderate',type:'line',source:'segAnalysis',filter:['==',['get','cls'],'moderate'],paint:{'line-color':'#ffa500','line-width':2.6}});
       map.addLayer({id:'seg-strong',type:'line',source:'segAnalysis',filter:['==',['get','cls'],'strong'],paint:{'line-color':'#ff453a','line-width':2.6}});
       map.addLayer({id:'seg-none',type:'line',source:'segAnalysis',filter:['==',['get','cls'],'none'],paint:{'line-color':'#9aa0a6','line-width':2.0,'line-dasharray':[1.5,1.5]}});
-      map.addLayer({id:'forecast-line',type:'line',source:'forecastLine',paint:{'line-color':'#ffffff','line-width':2.6,'line-opacity':0.95}});
+      map.addLayer({id:'seg-forecast-light',type:'line',source:'segForecast',filter:['==',['get','cls'],'light'],paint:{'line-color':'#7cf4b5','line-width':2.6, 'line-dasharray': [2, 1.5]}});
+      map.addLayer({id:'seg-forecast-moderate',type:'line',source:'segForecast',filter:['==',['get','cls'],'moderate'],paint:{'line-color':'#ffa500','line-width':2.6, 'line-dasharray': [2, 1.5]}});
+      map.addLayer({id:'seg-forecast-strong',type:'line',source:'segForecast',filter:['==',['get','cls'],'strong'],paint:{'line-color':'#ff453a','line-width':2.6, 'line-dasharray': [2, 1.5]}});
+      map.addLayer({id:'seg-forecast-none',type:'line',source:'segForecast',filter:['==',['get','cls'],'none'],paint:{'line-color':'#9aa0a6','line-width':2.0,'line-dasharray':[1.5,1.5]}});
       map.addLayer({id:'prob70-env-fill',type:'fill',source:'prob70Env',paint:{'fill-color':'#a980ff','fill-opacity':0.25}});
       map.addLayer({id:'prob70-env-line',type:'line',source:'prob70Env',layout:{'line-join':'round','line-cap':'round'},paint:{'line-color':'#a980ff','line-width':1.6}});
       map.addLayer({id:'ring7-now-fill',type:'fill',source:'ringsCurrent',filter:['==',['get','band'],'gale7'],paint:{'fill-color':'rgba(255,165,0,.35)','fill-opacity':0.6}});
@@ -759,7 +906,7 @@
       document.getElementById('chkTownBoundary').addEventListener('change',updateMapDisplay);
       document.getElementById('chkCurrent').addEventListener('change',updateMapDisplay);
       document.getElementById('fitTW').addEventListener('click',()=>map.fitBounds([[119,20.5],[123.8,25.6]],{padding:40,duration:600}));
-      document.getElementById('fitTy').addEventListener('click',()=>{const b=bboxOfSources(['segAnalysis','forecastLine','pts-current','pts-forecast']);map.fitBounds([[b[0],b[1]],[b[2],b[3]]],{padding:80,duration:800});});
+      document.getElementById('fitTy').addEventListener('click',()=>{const b=bboxOfSources(['segAnalysis','segForecast','pts-current','pts-forecast']);map.fitBounds([[b[0],b[1]],[b[2],b[3]]],{padding:80,duration:800});});
       document.getElementById('toggleLabels').addEventListener('click',()=>{labelsOn=!labelsOn;updateMapDisplay();});
       document.getElementById('toggleThemeBtn').addEventListener('click', toggleTheme);
       document.getElementById('chkRadar').addEventListener('change', updateMapDisplay);
@@ -769,6 +916,13 @@
           document.getElementById('lock-camera-btn').classList.toggle('active', isCameraLocked);
       });
 
+      const speedSlider = document.getElementById('speed-slider');
+      const speedLabel = document.getElementById('speed-label');
+      speedSlider.addEventListener('input', (e) => {
+          animationSpeed = parseFloat(e.target.value);
+          speedLabel.textContent = `${animationSpeed.toFixed(2)}x`;
+      });
+
       setTheme('dark');
     });
   }
@@ -776,11 +930,11 @@
   const themes = {
     dark: {
       ui: { '--bg': '#1f2025', '--fg': '#e7e7e7', '--muted': '#a3a3a3', '--card-bg': 'rgba(30, 30, 34, .9)', '--card-border': 'rgba(255, 255, 255, .08)', '--h4-color': '#cdb9ff', '--btn-bg': 'rgba(255, 255, 255, .08)', '--btn-border': 'rgba(255, 255, 255, .12)', '--btn-hover-bg': 'rgba(255, 255, 255, .14)', '--btn-active-fg': '#100f14', '--popup-bg': 'rgba(30, 30, 30, .92)', '--popup-fg': '#fff', '--popup-muted': '#ddd', '--list-border': 'rgba(255, 255, 255, .12)' },
-      map: { 'bg': { 'background-color': '#1f2025' }, 'countries': { 'fill-color': '#4E5057' }, 'tw-fill': { 'fill-color': '#4E5057' }, 'tw-lines': { 'line-color': '#ccc' }, 'forecast-line': { 'line-color': '#ffffff' }, 'pts-forecast': { 'circle-color': '#ffffff' }, 'pts-current-circle': { 'circle-stroke-color': '#fff' }, 'labels-forecast': { 'text-color': '#fff', 'text-halo-color': 'rgba(0,0,0,.9)' }, 'animated-point-label': { 'text-color': '#fff', 'text-halo-color': 'rgba(0,0,0,.9)' } }
+      map: { 'bg': { 'background-color': '#1f2025' }, 'countries': { 'fill-color': '#4E5057' }, 'tw-fill': { 'fill-color': '#4E5057' }, 'tw-lines': { 'line-color': '#ccc' }, 'forecast-line': { }, 'pts-forecast': { 'circle-color': '#ffffff' }, 'pts-current-circle': { 'circle-stroke-color': '#fff' }, 'labels-forecast': { 'text-color': '#fff', 'text-halo-color': 'rgba(0,0,0,.9)' }, 'animated-point-label': { 'text-color': '#fff', 'text-halo-color': 'rgba(0,0,0,.9)' } }
     },
     light: {
       ui: { '--bg': '#f8f9fa', '--fg': '#212529', '--muted': '#6c757d', '--card-bg': 'rgba(255, 255, 255, .85)', '--card-border': 'rgba(0, 0, 0, .1)', '--h4-color': '#5c4b99', '--btn-bg': 'rgba(0, 0, 0, .05)', '--btn-border': 'rgba(0, 0, 0, .1)', '--btn-hover-bg': 'rgba(0, 0, 0, .08)', '--btn-active-fg': '#ffffff', '--popup-bg': 'rgba(255, 255, 255, .95)', '--popup-fg': '#212529', '--popup-muted': '#495057', '--list-border': 'rgba(0,0,0,.1)' },
-      map: { 'bg': { 'background-color': '#f8f9fa' }, 'countries': { 'fill-color': '#dee2e6' }, 'tw-fill': { 'fill-color': '#dee2e6' }, 'tw-lines': { 'line-color': '#adb5bd' }, 'forecast-line': { 'line-color': '#343a40' }, 'pts-forecast': { 'circle-color': '#343a40' }, 'pts-current-circle': { 'circle-stroke-color': '#343a40' }, 'labels-forecast': { 'text-color': '#212529', 'text-halo-color': 'rgba(255,255,255,0.8)' }, 'animated-point-label': { 'text-color': '#212529', 'text-halo-color': 'rgba(255,255,255,0.8)' } }
+      map: { 'bg': { 'background-color': '#f8f9fa' }, 'countries': { 'fill-color': '#dee2e6' }, 'tw-fill': { 'fill-color': '#dee2e6' }, 'tw-lines': { 'line-color': '#adb5bd' }, 'forecast-line': { }, 'pts-forecast': { 'circle-color': '#343a40' }, 'pts-current-circle': { 'circle-stroke-color': '#343a40' }, 'labels-forecast': { 'text-color': '#212529', 'text-halo-color': 'rgba(255,255,255,0.8)' }, 'animated-point-label': { 'text-color': '#212529', 'text-halo-color': 'rgba(255,255,255,0.8)' } }
     }
   };
 
@@ -949,7 +1103,7 @@
         if (animationState.animationStartTs === 0) {
             animationState.animationStartTs = timestamp;
         }
-        const currentRunTime = timestamp - animationState.animationStartTs;
+        const currentRunTime = (timestamp - animationState.animationStartTs) * animationSpeed;
         const totalElapsedTime = animationState.pausedElapsed + currentRunTime;
         
         let progress = totalDuration > 0 ? totalElapsedTime / totalDuration : 1;
@@ -1030,7 +1184,10 @@
         if (animationState.handle) cancelAnimationFrame(animationState.handle);
         if (townshipAnimationPlayer) clearInterval(townshipAnimationPlayer);
         townshipAnimationPlayer = null;
-        animationState = { handle: null, animationStartTs: 0, pausedElapsed: 0, isPlaying: false, globalMinTime: null, globalMaxTime: null };
+        animationState.handle = null;
+        animationState.animationStartTs = 0;
+        animationState.pausedElapsed = 0;
+        animationState.isPlaying = false;
         document.getElementById('play-pause-btn').textContent='播放';
         setControlsDisabled(false);
     }
@@ -1059,11 +1216,13 @@
     setVisible(['labels-forecast'],labelsOn&&!isAnimationMode&&showStaticRings);
 
     const timelinePanel=document.getElementById('timeline-panel');
+    const dashboardPanel=document.getElementById('dashboard-panel');
     const animatedLayers=['animated-r7-fill','animated-r7-line','animated-r10-fill','animated-r10-line','animated-point-circle','animated-point-label'];
     const staticRingLayers=['ring7-now-fill','ring7-now-line','ring10-now-fill','ring10-now-line','ring7-fore-fill','ring7-fore-line','ring10-fore-fill','ring10-fore-line','pts-forecast'];
 
     if(isAnimationMode){
       timelinePanel.style.display='flex';
+      dashboardPanel.style.display='flex';
       setVisible(animatedLayers,true);
       setVisible(staticRingLayers,false);
       setVisible(['pts-current-circle'],false);
@@ -1076,6 +1235,7 @@
 
     }else{
       timelinePanel.style.display='none';
+      dashboardPanel.style.display='none';
       setVisible(animatedLayers,false);
       setVisible(['ring7-now-fill','ring7-now-line','ring10-now-fill','ring10-now-line'],showCurrentStatic);
       setVisible(['ring7-fore-fill','ring7-fore-line','ring10-fore-fill','ring10-fore-line','pts-forecast'],showStaticRings);
@@ -1112,51 +1272,241 @@
     if(map.getLayer('interest-borders')) map.moveLayer('interest-borders');
   }
 
+  function getTyphoonStateAt(typhoon, currentTime) {
+    const path = typhoon.rawInterpolatedPath;
+    if (!path || path.length < 2) return null;
+
+    const firstTime = path[0].time.getTime();
+    const lastTime = path[path.length - 1].time.getTime();
+    
+    if (currentTime.getTime() < firstTime || currentTime.getTime() > lastTime) return null;
+
+    let segmentIndex = -1;
+    for (let i = 0; i < path.length - 1; i++) {
+        if (path[i].time.getTime() <= currentTime.getTime() && path[i+1].time.getTime() >= currentTime.getTime()) {
+            segmentIndex = i;
+            break;
+        }
+    }
+    if (segmentIndex === -1) return null;
+
+    const pt1 = path[segmentIndex];
+    const pt2 = path[segmentIndex + 1];
+
+    const segmentDuration = pt2.time.getTime() - pt1.time.getTime();
+    const timeIntoSegment = currentTime.getTime() - pt1.time.getTime();
+    const t = segmentDuration > 0 ? timeIntoSegment / segmentDuration : 0;
+
+    const interpolate = (v1, v2) => {
+        const val1 = v1 == null ? 0 : v1;
+        const val2 = v2 == null ? 0 : v2;
+        if (val1 === 0 && val2 === 0) return null;
+        return val1 + (val2 - val1) * t;
+    };
+
+    return {
+        lon: interpolate(pt1.lon, pt2.lon),
+        lat: interpolate(pt1.lat, pt2.lat),
+        r15: interpolate(pt1.r15, pt2.r15),
+        r25: interpolate(pt1.r25, pt2.r25),
+        vmax: interpolate(pt1.vmax, pt2.vmax),
+        gust: interpolate(pt1.gust, pt2.gust),
+        p: interpolate(pt1.p, pt2.p),
+    };
+  }
+
+  function makeDraggable(panel) {
+    let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+    const handle = panel.querySelector('#dashboard-handle');
+
+    if (handle) {
+      handle.onmousedown = dragMouseDown;
+    }
+
+    function dragMouseDown(e) {
+        e = e || window.event;
+        e.preventDefault();
+        pos3 = e.clientX;
+        pos4 = e.clientY;
+        document.onmouseup = closeDragElement;
+        document.onmousemove = elementDrag;
+    }
+
+    function elementDrag(e) {
+        e = e || window.event;
+        e.preventDefault();
+        pos1 = pos3 - e.clientX;
+        pos2 = pos4 - e.clientY;
+        pos3 = e.clientX;
+        pos4 = e.clientY;
+        
+        panel.style.right = 'auto';
+        
+        const newTop = panel.offsetTop - pos2;
+        const newLeft = panel.offsetLeft - pos1;
+        const docWidth = document.documentElement.clientWidth;
+        const docHeight = document.documentElement.clientHeight;
+
+        panel.style.top = Math.max(0, Math.min(newTop, docHeight - panel.offsetHeight)) + "px";
+        panel.style.left = Math.max(0, Math.min(newLeft, docWidth - panel.offsetWidth)) + "px";
+    }
+
+    function closeDragElement() {
+        document.onmouseup = null;
+        document.onmousemove = null;
+    }
+  }
+
+  function createSparklineSVG(allFixes, key, currentTime, width, height) {
+    const data = allFixes.map(fix => ({ time: new Date(fix.time).getTime(), value: fix[key] })).filter(d => d.value !== null && !isNaN(d.value));
+    if (data.length < 2) return '';
+
+    const minTime = data[0].time;
+    const maxTime = data[data.length - 1].time;
+    const timeRange = maxTime - minTime;
+
+    const values = data.map(d => d.value);
+    let minValue = Math.min(...values);
+    let maxValue = Math.max(...values);
+    if (minValue === maxValue) {
+        minValue -= 1;
+        maxValue += 1;
+    }
+    const valueRange = maxValue - minValue;
+
+    const padding = 12;
+    const chartWidth = width - padding * 2;
+    const chartHeight = height - padding * 2;
+
+    const toX = time => padding + ((time - minTime) / timeRange) * chartWidth;
+    const toY = val => padding + chartHeight - ((val - minValue) / valueRange) * chartHeight;
+
+    const pathData = data.map(d => `${toX(d.time)},${toY(d.value)}`).join(' ');
+    const currentX = toX(currentTime.getTime());
+
+    const title = key === 'p' ? '氣壓 (hPa)' : '最大風速 (m/s)';
+    const lineColor = key === 'p' ? '#49d7ff' : '#a980ff';
+
+    return `
+        <svg viewBox="0 0 ${width} ${height}">
+            <text class="chart-label" x="5" y="12">${title}</text>
+            <path class="chart-path" d="M ${pathData}" stroke="${lineColor}" />
+            ${currentX >= padding && currentX <= width - padding ? `<line class="chart-marker" x1="${currentX}" y1="${padding}" x2="${currentX}" y2="${height - padding}" />` : ''}
+        </svg>
+    `;
+  }
+
+  function updateDashboard(currentTime) {
+    const panel = document.getElementById('dashboard-panel');
+    
+    if (!panel.dataset.initialized) {
+        panel.innerHTML = '<div id="dashboard-handle"></div><div id="dashboard-items" style="display: flex; flex-direction: column; gap: 14px;"></div>';
+        makeDraggable(panel);
+        panel.dataset.initialized = 'true';
+    }
+
+    const itemsContainer = panel.querySelector('#dashboard-items');
+    itemsContainer.innerHTML = '';
+
+    activeTyphoonData.forEach(typhoon => {
+        const originalPath = typhoon.allFixes;
+        if (!originalPath || originalPath.length === 0) return;
+
+        let activeFix = originalPath[0];
+        for (let i = 0; i < originalPath.length; i++) {
+            if (new Date(originalPath[i].time).getTime() <= currentTime.getTime()) {
+                activeFix = originalPath[i];
+            } else {
+                break;
+            }
+        }
+        const state = activeFix;
+        if (!state) return;
+
+        const intensityClass = classifyWind(state.vmax);
+        const intensityMap = { light: '輕颱', moderate: '中颱', strong: '強颱', none: '熱低壓' };
+        const intensityText = intensityMap[intensityClass] || '--';
+
+        let borderColor = 'rgba(154, 160, 166, 0.7)';
+        let bgColor = '#313338';
+        if (intensityClass === 'light') {
+            borderColor = 'rgba(124, 244, 181, 0.7)';
+            bgColor = '#2C3F3A';
+        } else if (intensityClass === 'moderate') {
+            borderColor = 'rgba(255, 165, 0, 0.7)';
+            bgColor = '#40341F';
+        } else if (intensityClass === 'strong') {
+            borderColor = 'rgba(255, 69, 58, 0.7)';
+            bgColor = '#402528';
+        }
+
+        const item = document.createElement('div');
+        item.className = 'dashboard-item';
+        item.style.borderColor = borderColor;
+        item.style.backgroundColor = bgColor;
+
+        const chartWidth = 300 - 18 * 2 - 4 * 2; // panel_width - item_padding - chart_padding
+        const pressureChart = createSparklineSVG(typhoon.allFixes, 'p', currentTime, chartWidth, 60);
+        const windChart = createSparklineSVG(typhoon.allFixes, 'vmax', currentTime, chartWidth, 60);
+
+        const name = typhoon.typhoon_name || '熱帶低氣壓';
+        const cwa_name = typhoon.cwa_typhoon_name || '';
+        const title = cwa_name ? `${name} (${cwa_name})` : name;
+
+        item.innerHTML = `
+            <h5>${title}</h5>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <span>目前強度</span>
+                    <strong>${intensityText}</strong>
+                </div>
+                <div class="stat-item">
+                    <span>中心氣壓</span>
+                    <strong>${state.p ? Math.round(state.p) + ' hPa' : '--'}</strong>
+                </div>
+                <div class="stat-item">
+                    <span>最大風速</span>
+                    <strong>${state.vmax ? Math.round(state.vmax) + ' m/s' : '--'}</strong>
+                </div>
+                <div class="stat-item">
+                    <span>最大陣風</span>
+                    <strong>${state.gust ? Math.round(state.gust) + ' m/s' : '--'}</strong>
+                </div>
+                <div class="stat-item">
+                    <span>七級半徑</span>
+                    <strong>${state.r15 ? Math.round(state.r15) + ' km' : '--'}</strong>
+                </div>
+                <div class="stat-item">
+                    <span>十級半徑</span>
+                    <strong>${state.r25 ? Math.round(state.r25) + ' km' : '--'}</strong>
+                </div>
+            </div>
+            <div class="chart-container" title="氣壓變化">${pressureChart}</div>
+            <div class="chart-container" title="風速變化">${windChart}</div>
+        `;
+        itemsContainer.appendChild(item);
+    });
+  }
+
   function updateTyphoonVisuals(currentTime) {
     const allRingFeatures = [];
     const allPointFeatures = [];
     const FADE_DURATION_MS = 500;
 
     activeTyphoonData.forEach(typhoon => {
-        const path = typhoon.rawInterpolatedPath;
-        if (!path || path.length < 2) return;
+        const state = getTyphoonStateAt(typhoon, currentTime);
+        if (!state) return;
 
-        const firstTime = path[0].time.getTime();
-        const lastTime = path[path.length - 1].time.getTime();
-        
-        if (currentTime.getTime() < firstTime || currentTime.getTime() > lastTime) return;
-
-        let segmentIndex = -1;
-        for (let i = 0; i < path.length - 1; i++) {
-            if (path[i].time.getTime() <= currentTime.getTime() && path[i+1].time.getTime() >= currentTime.getTime()) {
-                segmentIndex = i;
-                break;
-            }
-        }
-        if (segmentIndex === -1) return;
-
-        const pt1 = path[segmentIndex];
-        const pt2 = path[segmentIndex + 1];
-
-        const segmentDuration = pt2.time.getTime() - pt1.time.getTime();
-        const timeIntoSegment = currentTime.getTime() - pt1.time.getTime();
-        const t = segmentDuration > 0 ? timeIntoSegment / segmentDuration : 0;
-
-        const lon = pt1.lon + (pt2.lon - pt1.lon) * t;
-        const lat = pt1.lat + (pt2.lat - pt1.lat) * t;
-        const r7 = (pt1.r15 || 0) + ((pt2.r15 || 0) - (pt1.r15 || 0)) * t;
-        const r10 = (pt1.r25 || 0) + ((pt2.r25 || 0) - (pt1.r25 || 0)) * t;
-        
-        const timeSinceStart = currentTime.getTime() - firstTime;
+        const timeSinceStart = currentTime.getTime() - animationState.globalMinTime.getTime();
         const opacity = timeSinceStart < FADE_DURATION_MS ? timeSinceStart / FADE_DURATION_MS : 1;
 
-        const r7_poly_coords = circleLonLat(lon, lat, r7, 64);
-        const r10_poly_coords = circleLonLat(lon, lat, r10, 64);
+        const r7_poly_coords = circleLonLat(state.lon, state.lat, state.r15, 64);
+        const r10_poly_coords = circleLonLat(state.lon, state.lat, state.r25, 64);
 
         const isCurrentOrPast = currentTime.getTime() <= typhoon.cwaCurrentTime.getTime();
         if (r7_poly_coords) allRingFeatures.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [r7_poly_coords] }, properties: { band: 'gale7', isCurrentOrPast, opacity } });
         if (r10_poly_coords) allRingFeatures.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [r10_poly_coords] }, properties: { band: 'gale10', isCurrentOrPast, opacity } });
-        allPointFeatures.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [lon, lat] }, properties: { label: fmtLabel(currentTime), opacity } });
+        allPointFeatures.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [state.lon, state.lat] }, properties: { label: fmtLabel(currentTime), opacity } });
     });
 
     map.getSource('animated-rings').setData({ type: 'FeatureCollection', features: allRingFeatures });
@@ -1168,6 +1518,10 @@
     if (isCameraLocked && activeTyphoonData.length === 1 && allPointFeatures.length > 0) {
         const point = allPointFeatures[0].geometry.coordinates;
         map.setCenter(point);
+    }
+
+    if (isAnimationMode) {
+      updateDashboard(currentTime);
     }
   }
 
