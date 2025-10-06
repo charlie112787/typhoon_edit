@@ -56,11 +56,11 @@
     #timeline-slider{width:220px}
 
     #dashboard-panel {
-      /* Panel is now frameless. Drag is handled by the panel itself. */
-      background: rgba(50, 52, 58, 0.7); /* More transparent */
-      backdrop-filter: saturate(180%) blur(12px);
-      border: 1px solid rgba(255, 255, 255, 0.12); /* Add subtle border */
-      border-radius: 14px; /* Slightly smaller radius */
+      /* Panel is now a transparent container. Effects are on the items. */
+      background: transparent;
+      backdrop-filter: none;
+      border: none;
+      border-radius: 14px;
       
       /* Layout */
       position: absolute;
@@ -99,7 +99,7 @@
       padding: 12px; /* Reduced padding */
       border-radius: 10px;
       border-left: 4px solid; /* Color is set by JS - removed !important */
-
+      backdrop-filter: blur(4px); /* Restore blur without saturation */
     }
     .dashboard-item h5 {
       margin: 0 0 10px 0;
@@ -171,6 +171,66 @@
     }
     .icon-btn:hover{background:var(--btn-hover-bg)}
     .icon-btn svg{width:18px;height:18px;display:block}
+    /* New styles for single typhoon view */
+    #dashboard-panel.single-view {
+        width: 250px; /* Further reduced width */
+    }
+
+    .single-view .stats-grid {
+        grid-template-columns: 1fr; /* Keep single column layout */
+        gap: 16px; /* Adjust gap */
+    }
+
+    .single-view .stat-item {
+        flex-direction: column; /* Stack label and value */
+        align-items: flex-start; /* Left-align the content */
+        border-bottom: 1px solid var(--card-border);
+        padding-bottom: 12px;
+    }
+
+    .single-view .stat-item:last-child {
+        border-bottom: none;
+        padding-bottom: 0;
+    }
+
+    .single-view .stat-item span {
+        font-size: 14px;
+        color: var(--muted);
+        margin-bottom: 6px; /* Space between label and value */
+    }
+
+    .single-view .stat-item strong {
+        font-weight: 700;
+        line-height: 1;
+        display: flex;
+        align-items: baseline; /* Aligns number and unit nicely */
+    }
+
+    .single-view .stat-item strong .unit {
+        font-size: 16px;
+        font-weight: 400;
+        color: var(--muted);
+        margin-left: 8px; /* Space between number and unit */
+        text-transform: none; /* Override the general uppercase rule */
+    }
+
+    /* Increased font sizes */
+    .single-view .stat-item.ty-strength strong {
+        font-size: 22px;
+        color: var(--fg);
+    }
+    .single-view .stat-item.ty-pressure strong {
+        font-size: 40px; /* Further Increased */
+    }
+    .single-view .stat-item.ty-wind strong {
+        font-size: 40px; /* Further Increased */
+    }
+    .single-view .stat-item.ty-radius10 strong {
+        font-size: 40px; /* Further Increased */
+    }
+    .single-view .stat-item.ty-radius7 strong {
+        font-size: 22px; /* Increased */
+    }
     /* Floating eye shown only when面板收起 */
     #panelToggleFloating{
       position:absolute;left:12px;top:12px;z-index:11;display:none;
@@ -651,53 +711,52 @@
         prob70Json.features.forEach(f => {
             if (f.geometry && f.geometry.type === 'LineString' &&
                 f.properties.name === '路徑潛勢預測' &&
-                Array.isArray(f.geometry.coordinates[0]) &&
-                Array.isArray(f.geometry.coordinates[0][0])) {
+                Array.isArray(f.geometry.coordinates[0])) {
                 f.geometry.type = 'Polygon';
             }
         });
 
         const probPolygons = prob70Json.features.filter(f => f.geometry && f.geometry.type === 'Polygon' && f.properties.name === '路徑潛勢預測');
 
-        // Brittle fix as a last resort, since geometric matching with turf.js is failing.
-        if (allStorms.length === 2 && probPolygons.length === 2) {
-            const matmoStorm = allStorms.find(s => s.typhoon_name === 'MATMO');
-            const tdStorm = allStorms.find(s => !s.typhoon_name);
+        // Match storms to their 70% probability envelopes using geometric intersection.
+        allStorms.forEach(storm => {
+            if (!storm.analysis_data || !storm.analysis_data.fix) return;
+            const analysis = Array.isArray(storm.analysis_data.fix) ? storm.analysis_data.fix : [storm.analysis_data.fix];
+            if (analysis.length === 0) return;
+            const currentFix = analysis[analysis.length - 1];
+            if (!currentFix || !currentFix.coordinate) return;
+            const lon = +currentFix.coordinate.split(',')[0];
+            const lat = +currentFix.coordinate.split(',')[1];
+            const centerPoint = turf.point([lon, lat]);
+            
+            const matchingPolygon = probPolygons.reduce((closest, poly) => {
+                if (!poly.geometry || !poly.geometry.coordinates || !poly.geometry.coordinates[0]) return closest;
 
-            // Identify polygons by their rough longitude. This is very brittle.
-            const matmoPoly = probPolygons.find(p => p.geometry.coordinates[0][0][0] < 130);
-            const tdPoly = probPolygons.find(p => p.geometry.coordinates[0][0][0] > 130);
-
-            if (matmoStorm && matmoPoly) {
-                const matmoId = matmoStorm.typhoon_name || `${matmoStorm.year}-${matmoStorm.cwa_td_no}`;
-                probEnvelopesMap.set(matmoId, matmoPoly);
-            }
-            if (tdStorm && tdPoly) {
-                const tdId = tdStorm.typhoon_name || `${tdStorm.year}-${tdStorm.cwa_td_no}`;
-                probEnvelopesMap.set(tdId, tdPoly);
-            }
-        } else {
-            // Fallback to the old geometric logic if the number of storms/polygons isn't exactly 2.
-            allStorms.forEach(storm => {
-                if (!storm.analysis_data || !storm.analysis_data.fix) return;
-                const analysis = Array.isArray(storm.analysis_data.fix) ? storm.analysis_data.fix : [storm.analysis_data.fix];
-                if (analysis.length === 0) return;
-                const currentFix = analysis[analysis.length - 1];
-                if (!currentFix || !currentFix.coordinate) return;
-                const lon = +currentFix.coordinate.split(',')[0];
-                const lat = +currentFix.coordinate.split(',')[1];
-                const centerPoint = turf.point([lon, lat]);
-                const matchingPolygon = probPolygons.find(poly => {
-                    try { return turf.booleanPointInPolygon(centerPoint, poly); } catch (e) { return false; }
-                });
-                if (matchingPolygon) {
-                    const stormId = storm.typhoon_name || `${storm.year}-${storm.cwa_td_no}`;
-                    if (stormId) {
-                        probEnvelopesMap.set(stormId, matchingPolygon);
-                    }
+                // Avoid matching a polygon that's already been assigned
+                for (const value of probEnvelopesMap.values()) {
+                    if (value === poly) return closest;
                 }
-            });
-        }    }
+
+                try {
+                    const line = turf.lineString(poly.geometry.coordinates[0]);
+                    const distance = turf.pointToLineDistance(centerPoint, line, { units: 'kilometers' });
+
+                    if (distance < closest.distance) {
+                        return { poly: poly, distance: distance };
+                    }
+                } catch (e) {
+                    console.error("Error during point to polygon distance check", e);
+                }
+                return closest;
+            }, { poly: null, distance: Infinity });
+
+            if (matchingPolygon.poly) {
+                const stormId = storm.typhoon_name || `${storm.year}-${storm.cwa_td_no}`;
+                if (stormId) {
+                    probEnvelopesMap.set(stormId, matchingPolygon.poly);
+                }
+            }
+        });    }
 
     if (allStorms.length > 0) {
         selectedStormIndices.add(0);
@@ -738,8 +797,19 @@
                                 if (!typhoonPaths[pathId]) {
                                     typhoonPaths[pathId] = [];
                                 }
-                                typhoonPaths[pathId].push({
-                                    lon: parseFloat(row.lon),
+
+                                const lon = parseFloat(row.lon);
+                                const path = typhoonPaths[pathId];
+                                const lastLon = path.length > 0 ? path[path.length - 1].lon : lon;
+                                let adjustedLon = lon;
+
+                                // Adjust for date line crossing
+                                if (Math.abs(lon - lastLon) > 180) {
+                                    adjustedLon += (lon > lastLon ? -360 : 360);
+                                }
+
+                                path.push({
+                                    lon: adjustedLon,
                                     lat: parseFloat(row.lat),
                                     wind: parseFloat(row.maximum_sustained_wind_speed_knots)
                                 });
@@ -1281,6 +1351,22 @@
     }
   }
 
+  function setPlaybackUiVisibility(isPlaying) {
+    const show = !isPlaying;
+    const label = document.getElementById('timeline-label');
+    const slider = document.getElementById('timeline-slider');
+    const lockBtn = document.getElementById('lock-camera-btn');
+    const speedPanel = document.getElementById('speed-control-panel');
+
+    if (label) label.style.display = show ? 'block' : 'none';
+    if (slider) slider.style.display = show ? 'block' : 'none';
+    if (lockBtn) lockBtn.style.display = show ? 'block' : 'none';
+    if (speedPanel) speedPanel.style.display = show ? 'flex' : 'none';
+    
+    const timelinePanel = document.getElementById('timeline-panel');
+    if(timelinePanel) timelinePanel.style.justifyContent = show ? 'flex-start' : 'flex-end';
+  }
+
   function setupTimeline(){
     const slider = document.getElementById('timeline-slider');
     let playPauseBtn = document.getElementById('play-pause-btn');
@@ -1365,6 +1451,7 @@
         
         playPauseBtn.textContent = '播放';
         setControlsDisabled(false);
+        setPlaybackUiVisibility(false);
       } else { // PLAY
         if (!hasTime) return;
         
@@ -1384,6 +1471,7 @@
 
         playPauseBtn.textContent = '暫停';
         setControlsDisabled(true);
+        setPlaybackUiVisibility(true);
         animationState.isPlaying = true;
         animationState.animationStartTs = performance.now();
 
@@ -1406,6 +1494,7 @@
         animationState.isPlaying = false;
         document.getElementById('play-pause-btn').textContent='播放';
         setControlsDisabled(false);
+        setPlaybackUiVisibility(false); // Restore UI visibility
     }
     updateMapDisplay();
   }
@@ -1590,24 +1679,61 @@
     }
     const valueRange = maxValue - minValue;
 
-    const padding = 12;
-    const chartWidth = width - padding * 2;
-    const chartHeight = height - padding * 2;
+    const padding = { top: 20, right: 0, bottom: 5, left: 0 };
+    const chartWidth = width - padding.left - padding.right;
+    const chartHeight = height - padding.top - padding.bottom;
 
-    const toX = time => padding + ((time - minTime) / timeRange) * chartWidth;
-    const toY = val => padding + chartHeight - ((val - minValue) / valueRange) * chartHeight;
+    const toX = time => padding.left + ((time - minTime) / timeRange) * chartWidth;
+    const toY = val => padding.top + chartHeight - ((val - minValue) / valueRange) * chartHeight;
 
-    const pathData = data.map(d => `${toX(d.time)},${toY(d.value)}`).join(' ');
+    // Find current value for the label
+    let currentValue = null;
+    for (let i = 0; i < data.length - 1; i++) {
+        if (data[i].time <= currentTime.getTime() && data[i+1].time >= currentTime.getTime()) {
+            const t1 = data[i].time, v1 = data[i].value;
+            const t2 = data[i+1].time, v2 = data[i+1].value;
+            if ((t2 - t1) === 0) {
+                currentValue = v1;
+                break;
+            }
+            const ratio = (currentTime.getTime() - t1) / (t2 - t1);
+            currentValue = v1 + (v2 - v1) * ratio;
+            break;
+        }
+    }
+    if (currentValue === null) {
+        if(currentTime.getTime() <= data[0].time) currentValue = data[0].value;
+        else currentValue = data[data.length-1].value;
+    }
+
+
+    const pathData = data.map(d => `${toX(d.time)},${toY(d.value)}`).join(' L ');
+    const fillPathData = `M ${toX(minTime)},${height - padding.bottom} L ${pathData} L ${toX(maxTime)},${height - padding.bottom} Z`;
+
     const currentX = toX(currentTime.getTime());
+    const currentY = toY(currentValue);
 
-    const title = key === 'p' ? '氣壓 (hPa)' : '最大風速 (m/s)';
+    const titleText = key === 'p' ? '氣壓 (hPa)' : '最大風速 (m/s)';
     const lineColor = key === 'p' ? '#49d7ff' : '#a980ff';
+    const gradientId = `sparkline-gradient-${key}`;
+
+    const valueLabel = currentValue ? Math.round(currentValue) : '';
 
     return `
-        <svg viewBox="0 0 ${width} ${height}">
-            <text class="chart-label" x="5" y="12">${title}</text>
-            <path class="chart-path" d="M ${pathData}" stroke="${lineColor}" />
-            ${currentX >= padding && currentX <= width - padding ? `<line class="chart-marker" x1="${currentX}" y1="${padding}" x2="${currentX}" y2="${height - padding}" />` : ''}
+        <svg viewBox="0 0 ${width} ${height}" style="overflow: visible;">
+            <defs>
+                <linearGradient id="${gradientId}" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="${lineColor}" stop-opacity="0.4"/>
+                    <stop offset="100%" stop-color="${lineColor}" stop-opacity="0"/>
+                </linearGradient>
+            </defs>
+            <text class="chart-label" x="${padding.left}" y="14" style="font-size: 13px;">${titleText}</text>
+            <path d="${fillPathData}" fill="url(#${gradientId})" stroke="none" />
+            <path class="chart-path" d="M ${pathData}" stroke="${lineColor}" stroke-width="2" fill="none" />
+            ${(currentX >= padding.left && currentX <= width - padding.right) ? `
+                <line x1="${currentX}" y1="${padding.top}" x2="${currentX}" y2="${height - padding.bottom}" stroke="rgba(255,255,255,0.5)" stroke-width="1" stroke-dasharray="2,2" />
+                <circle cx="${currentX}" cy="${currentY}" r="4" fill="${lineColor}" stroke="var(--card-bg)" stroke-width="2" />
+            ` : ''}
         </svg>
     `;
   }
@@ -1623,6 +1749,9 @@
 
     const itemsContainer = panel.querySelector('#dashboard-items');
     itemsContainer.innerHTML = '';
+
+    const isSingleView = activeTyphoonData.length === 1;
+    panel.classList.toggle('single-view', isSingleView);
 
     activeTyphoonData.forEach(typhoon => {
         const originalPath = typhoon.allFixes;
@@ -1644,16 +1773,16 @@
         const intensityText = intensityMap[intensityClass] || '--';
 
         let borderColor = 'rgba(154, 160, 166, 0.7)';
-        let bgColor = '#424549'; // Gray
+        let bgColor = 'rgba(66, 69, 73, 0.5)'; // Adjusted default background
         if (intensityClass === 'light') {
             borderColor = 'rgba(124, 244, 181, 1)';
-            bgColor = '#205045'; // More Saturated Green
+            bgColor = 'rgba(32, 80, 69, 0.5)';
         } else if (intensityClass === 'moderate') {
             borderColor = 'rgba(255, 165, 0, 1)';
-            bgColor = '#4e3b1d'; // More Saturated Orange
+            bgColor = 'rgba(255, 165, 0, 0.21)'; // Match storm circle effective opacity
         } else if (intensityClass === 'strong') {
             borderColor = 'rgba(255, 69, 58, 1)';
-            bgColor = '#66221F'; // More Saturated Red
+            bgColor = 'rgba(255, 69, 58, 0.35)'; // Use 10-level circle fill color
         }
 
         const item = document.createElement('div');
@@ -1661,7 +1790,7 @@
         item.style.borderColor = borderColor;
         item.style.backgroundColor = bgColor;
 
-        const chartWidth = 300 - 18 * 2 - 4 * 2; // panel_width - item_padding - chart_padding
+        const chartWidth = (isSingleView ? 320 : 256) - 24 - 8; // panel_width - item_padding - border
         const pressureChart = createSparklineSVG(typhoon.allFixes, 'p', currentTime, chartWidth, 60);
         const windChart = createSparklineSVG(typhoon.allFixes, 'vmax', currentTime, chartWidth, 60);
 
@@ -1669,37 +1798,75 @@
         const cwa_name = typhoon.cwa_typhoon_name || '';
         const title = typhoon.typhoon_name ? `${typhoon.typhoon_name} (${cwa_name})` : name;
 
-        item.innerHTML = `
-            <h5>${title}</h5>
-            <div class="stats-grid">
-                <div class="stat-item">
-                    <span>目前強度</span>
-                    <strong>${intensityText}</strong>
+        let contentHTML = '';
+        if (isSingleView) {
+            // New layout for single typhoon
+            contentHTML = `
+                <h5>${title}</h5>
+                <div class="stats-grid">
+                    <div class="stat-item ty-strength">
+                        <span>目前強度</span>
+                        <strong>${intensityText}</strong>
+                    </div>
+                    <div class="stat-item ty-pressure">
+                        <span>中心氣壓</span>
+                        <strong>${state.p ? `${Math.round(state.p)}<span class="unit">hPa</span>` : '--'}</strong>
+                    </div>
+                    <div class="stat-item ty-wind">
+                        <span>最大風速</span>
+                        <strong>${state.vmax ? `${Math.round(state.vmax)}<span class="unit">m/s</span>` : '--'}</strong>
+                    </div>
+                    <div class="stat-item ty-radius10">
+                        <span>十級半徑</span>
+                        <strong>${state.r25 ? `${Math.round(state.r25)}<span class="unit">km</span>` : '--'}</strong>
+                    </div>
+                    <div class="stat-item ty-radius7">
+                        <span>七級半徑</span>
+                        <strong>${state.r15 ? `${Math.round(state.r15)}<span class="unit">km</span>` : '--'}</strong>
+                    </div>
+                    <div class="stat-item">
+                        <span>最大陣風</span>
+                        <strong>${state.gust ? `${Math.round(state.gust)}<span class="unit">m/s</span>` : '--'}</strong>
+                    </div>
                 </div>
-                <div class="stat-item">
-                    <span>中心氣壓</span>
-                    <strong>${state.p ? Math.round(state.p) + ' hPa' : '--'}</strong>
+                <div class="chart-container" title="氣壓變化">${pressureChart}</div>
+                <div class="chart-container" title="風速變化">${windChart}</div>
+            `;
+        } else {
+            // Original layout for multiple typhoons
+            contentHTML = `
+                <h5>${title}</h5>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span>目前強度</span>
+                        <strong>${intensityText}</strong>
+                    </div>
+                    <div class="stat-item">
+                        <span>中心氣壓</span>
+                        <strong>${state.p ? Math.round(state.p) + ' hPa' : '--'}</strong>
+                    </div>
+                    <div class="stat-item">
+                        <span>最大風速</span>
+                        <strong>${state.vmax ? Math.round(state.vmax) + ' m/s' : '--'}</strong>
+                    </div>
+                    <div class="stat-item">
+                        <span>最大陣風</span>
+                        <strong>${state.gust ? Math.round(state.gust) + ' m/s' : '--'}</strong>
+                    </div>
+                    <div class="stat-item">
+                        <span>七級半徑</span>
+                        <strong>${state.r15 ? Math.round(state.r15) + ' km' : '--'}</strong>
+                    </div>
+                    <div class="stat-item">
+                        <span>十級半徑</span>
+                        <strong>${state.r25 ? Math.round(state.r25) + ' km' : '--'}</strong>
+                    </div>
                 </div>
-                <div class="stat-item">
-                    <span>最大風速</span>
-                    <strong>${state.vmax ? Math.round(state.vmax) + ' m/s' : '--'}</strong>
-                </div>
-                <div class="stat-item">
-                    <span>最大陣風</span>
-                    <strong>${state.gust ? Math.round(state.gust) + ' m/s' : '--'}</strong>
-                </div>
-                <div class="stat-item">
-                    <span>七級半徑</span>
-                    <strong>${state.r15 ? Math.round(state.r15) + ' km' : '--'}</strong>
-                </div>
-                <div class="stat-item">
-                    <span>十級半徑</span>
-                    <strong>${state.r25 ? Math.round(state.r25) + ' km' : '--'}</strong>
-                </div>
-            </div>
-            <div class="chart-container" title="氣壓變化">${pressureChart}</div>
-            <div class="chart-container" title="風速變化">${windChart}</div>
-        `;
+                <div class="chart-container" title="氣壓變化">${pressureChart}</div>
+                <div class="chart-container" title="風速變化">${windChart}</div>
+            `;
+        }
+        item.innerHTML = contentHTML;
         itemsContainer.appendChild(item);
     });
   }
