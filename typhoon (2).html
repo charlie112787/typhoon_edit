@@ -704,59 +704,55 @@
     fetch('W-C0034-005.json').then(r => r.json()),
     fetch('W-C0034-002.json').then(r => r.json()).catch(e => { console.error('Failed to load W-C0034-002.json', e); return null; })
   ]).then(([mainJson, prob70Json]) => {
-    const cyclones = mainJson?.cwaopendata?.dataset?.tropicalCyclones?.tropicalCyclone;
-    allStorms = cyclones ? (Array.isArray(cyclones) ? cyclones : [cyclones]) : [];
+    allStorms = mainJson.cwaopendata.dataset.tropicalCyclones.tropicalCyclone;
+    if(!Array.isArray(allStorms)) allStorms = [allStorms];
 
     if (prob70Json && prob70Json.features) {
         prob70Json.features.forEach(f => {
-            if (f.geometry && f.geometry.type === 'LineString' &&
-                f.properties.name === '路徑潛勢預測' &&
-                Array.isArray(f.geometry.coordinates[0])) {
-                f.geometry.type = 'Polygon';
+            if (f.geometry && f.properties.name === '路徑潛勢預測' && f.geometry.type === 'LineString') {
+                const coords = f.geometry.coordinates;
+                if (coords && coords.length > 0) {
+                    f.geometry.type = 'Polygon';
+                    // Ensure coordinates are wrapped in an array of rings.
+                    if (Array.isArray(coords[0]) && !Array.isArray(coords[0][0])) {
+                        f.geometry.coordinates = [coords];
+                    }
+                }
             }
         });
 
-        const probPolygons = prob70Json.features.filter(f => f.geometry && f.geometry.type === 'Polygon' && f.properties.name === '路徑潛勢預測');
-
-        // Match storms to their 70% probability envelopes using geometric intersection.
+        const probPolygons = prob70Json.features.filter(f => f.geometry && f.geometry.type === 'Polygon');
+        console.log('Found probPolygons:', JSON.stringify(probPolygons));
+        
         allStorms.forEach(storm => {
-            if (!storm.analysis_data || !storm.analysis_data.fix) return;
-            const analysis = Array.isArray(storm.analysis_data.fix) ? storm.analysis_data.fix : [storm.analysis_data.fix];
-            if (analysis.length === 0) return;
+            const stormId = storm.typhoon_name || `${storm.year}-${storm.cwa_td_no}`;
+            const analysis = storm.analysis_data.fix;
+            if (!analysis || analysis.length === 0) return;
             const currentFix = analysis[analysis.length - 1];
-            if (!currentFix || !currentFix.coordinate) return;
             const lon = +currentFix.coordinate.split(',')[0];
             const lat = +currentFix.coordinate.split(',')[1];
             const centerPoint = turf.point([lon, lat]);
-            
-            const matchingPolygon = probPolygons.reduce((closest, poly) => {
-                if (!poly.geometry || !poly.geometry.coordinates || !poly.geometry.coordinates[0]) return closest;
+            console.log('Storm ID:', stormId, 'centerPoint:', JSON.stringify(centerPoint));
 
-                // Avoid matching a polygon that's already been assigned
-                for (const value of probEnvelopesMap.values()) {
-                    if (value === poly) return closest;
-                }
-
+            const matchingPolygon = probPolygons.find(poly => {
                 try {
-                    const line = turf.lineString(poly.geometry.coordinates[0]);
-                    const distance = turf.pointToLineDistance(centerPoint, line, { units: 'kilometers' });
-
-                    if (distance < closest.distance) {
-                        return { poly: poly, distance: distance };
-                    }
+                    const isInside = turf.booleanPointInPolygon(centerPoint, poly);
+                    console.log('Checking if point for storm', stormId, 'is inside a polygon:', isInside);
+                    return isInside;
                 } catch (e) {
-                    console.error("Error during point to polygon distance check", e);
+                    console.error('turf.booleanPointInPolygon error for storm', stormId, ':', e);
+                    return false;
                 }
-                return closest;
-            }, { poly: null, distance: Infinity });
+            });
 
-            if (matchingPolygon.poly) {
-                const stormId = storm.typhoon_name || `${storm.year}-${storm.cwa_td_no}`;
-                if (stormId) {
-                    probEnvelopesMap.set(stormId, matchingPolygon.poly);
-                }
+            if (matchingPolygon) {
+                console.log('Found matching polygon for storm:', stormId);
+                probEnvelopesMap.set(stormId, matchingPolygon);
+            } else {
+                console.log('No matching polygon found for storm:', stormId);
             }
-        });    }
+        });
+    }
 
     if (allStorms.length > 0) {
         selectedStormIndices.add(0);
@@ -768,153 +764,6 @@
     map.on('load', () => {
         populateTyphoonSelector();
         updateTyphoonDisplay();
-
-        // --- GEMINI REFACTORED FNV3 LOGIC START ---
-        function getWindClass(knots) {
-            if (knots === null || knots === undefined || knots === '') return 'NONE';
-            const k = parseFloat(knots);
-            if (k >= 137) return 'CAT5';
-            if (k >= 113) return 'CAT4';
-            if (k >= 96) return 'CAT3';
-            if (k >= 83) return 'CAT2';
-            if (k >= 64) return 'CAT1';
-            if (k >= 34) return 'TS';
-            return 'TD';
-        }
-
-        fetch('FNV3_2025_10_02T18_00_paired.csv')
-            .then(response => response.text())
-            .then(csvText => {
-                Papa.parse(csvText, {
-                    header: true,
-                    skipEmptyLines: true,
-                    comments: '#', // Ignore lines starting with #
-                    complete: function(results) {
-                        const typhoonPaths = {};
-                        results.data.forEach(row => {
-                            if (row.track_id && row.lat && row.lon) {
-                                const pathId = `${row.track_id.trim()}-${row.sample.trim()}`;
-                                if (!typhoonPaths[pathId]) {
-                                    typhoonPaths[pathId] = [];
-                                }
-
-                                const lon = parseFloat(row.lon);
-                                const path = typhoonPaths[pathId];
-                                const lastLon = path.length > 0 ? path[path.length - 1].lon : lon;
-                                let adjustedLon = lon;
-
-                                // Adjust for date line crossing
-                                if (Math.abs(lon - lastLon) > 180) {
-                                    adjustedLon += (lon > lastLon ? -360 : 360);
-                                }
-
-                                path.push({
-                                    lon: adjustedLon,
-                                    lat: parseFloat(row.lat),
-                                    wind: parseFloat(row.maximum_sustained_wind_speed_knots)
-                                });
-                            }
-                        });
-
-                        const fnv3ColorMap = {
-                            'TD': '#55d9f4', 'TS': '#55f47b', 'CAT1': '#f4f155',
-                            'CAT2': '#f4a055', 'CAT3': '#f45555', 'CAT4': '#d955f4',
-                            'CAT5': '#ff0000', 'NONE': '#cccccc'
-                        };
-
-                        const fnv3Selector = document.getElementById('fnv3Selector');
-                        if (!fnv3Selector) return;
-                        fnv3Selector.innerHTML = ''; // Clear previous entries
-
-                        const typhoonGroups = {}; // To group layers by track_id
-
-                        // First, create all sources and layers
-                        Object.keys(typhoonPaths).forEach(pathId => {
-                            const points = typhoonPaths[pathId];
-                            const features = [];
-                            for (let i = 0; i < points.length - 1; i++) {
-                                const start = points[i];
-                                const end = points[i+1];
-                                const windClass = getWindClass(start.wind);
-                                features.push({
-                                    type: 'Feature',
-                                    properties: { 'class': windClass },
-                                    geometry: {
-                                        type: 'LineString',
-                                        coordinates: [[start.lon, start.lat], [end.lon, end.lat]]
-                                    }
-                                });
-                            }
-
-                            const sourceId = `fnv3-source-${pathId}`;
-                            const layerId = `fnv3-layer-${pathId}`;
-                            const trackId = pathId.split('-')[0];
-
-                            // Group layer IDs by trackId
-                            if (!typhoonGroups[trackId]) {
-                                typhoonGroups[trackId] = [];
-                            }
-                            typhoonGroups[trackId].push(layerId);
-
-                            map.addSource(sourceId, {
-                                type: 'geojson',
-                                data: { type: 'FeatureCollection', features: features }
-                            });
-
-                            map.addLayer({
-                                id: layerId,
-                                type: 'line',
-                                source: sourceId,
-                                layout: {
-                                    'line-join': 'round',
-                                    'line-cap': 'round',
-                                    'visibility': 'none' // All layers are initially hidden
-                                },
-                                paint: {
-                                    'line-width': 2.5,
-                                    'line-opacity': 0.7,
-                                    'line-color': [
-                                        'match',
-                                        ['get', 'class'],
-                                        'TD', fnv3ColorMap.TD, 'TS', fnv3ColorMap.TS,
-                                        'CAT1', fnv3ColorMap.CAT1, 'CAT2', fnv3ColorMap.CAT2,
-                                        'CAT3', fnv3ColorMap.CAT3, 'CAT4', fnv3ColorMap.CAT4,
-                                        'CAT5', fnv3ColorMap.CAT5,
-                                        fnv3ColorMap.NONE
-                                    ]
-                                }
-                            });
-                        });
-
-                        // Now, create one checkbox for each group
-                        Object.keys(typhoonGroups).forEach(trackId => {
-                            const layerIds = typhoonGroups[trackId];
-                            const item = document.createElement('div');
-                            item.className = 'list-item';
-                            const cb = document.createElement('input');
-                            cb.type = 'checkbox';
-                            cb.id = `cb-group-${trackId}`;
-                            
-                            cb.addEventListener('change', (e) => {
-                                const visibility = e.target.checked ? 'visible' : 'none';
-                                layerIds.forEach(layerId => {
-                                    map.setLayoutProperty(layerId, 'visibility', visibility);
-                                });
-                            });
-
-                            const label = document.createElement('label');
-                            label.textContent = `${trackId} (${layerIds.length} members)`;
-                            label.setAttribute('for', cb.id);
-
-                            item.appendChild(cb); 
-                            item.appendChild(label);
-                            fnv3Selector.appendChild(item);
-                        });
-                    }
-                });
-            })
-            .catch(error => console.error('Error loading or parsing FNV3 CSV:', error));
-        // --- GEMINI REFACTORED FNV3 LOGIC END ---
     });
 
   }).catch(err=>{console.error(err);alert('讀取 CWA JSON 失敗');});
@@ -1008,6 +857,7 @@
     map.getSource('ringsCurrent').setData({type:'FeatureCollection', features: allCurrentRings});
     map.getSource('ringsForecast').setData({type:'FeatureCollection', features: allForecastRings});
     if (map.getSource('prob70Env')) {
+        console.log('Updating prob70Env source with data:', allProbEnvelopes);
         map.getSource('prob70Env').setData({type:'FeatureCollection', features: allProbEnvelopes});
     }
 
@@ -1662,12 +1512,12 @@
     }
   }
 
-  function createSparklineSVG(allFixes, key, currentTime, width, height) {
+  function createSparklineSVG(allFixes, key, currentTime, width, height, overallMinTime, overallMaxTime) {
     const data = allFixes.map(fix => ({ time: new Date(fix.time).getTime(), value: fix[key] })).filter(d => d.value !== null && !isNaN(d.value));
     if (data.length < 2) return '';
 
-    const minTime = data[0].time;
-    const maxTime = data[data.length - 1].time;
+    const minTime = overallMinTime;
+    const maxTime = overallMaxTime;
     const timeRange = maxTime - minTime;
 
     const values = data.map(d => d.value);
@@ -1790,9 +1640,13 @@
         item.style.borderColor = borderColor;
         item.style.backgroundColor = bgColor;
 
+		const allTimes = typhoon.allFixes.map(f => new Date(f.time).getTime());
+        const overallMinTime = allTimes.length > 0 ? Math.min(...allTimes) : 0;
+        const overallMaxTime = allTimes.length > 0 ? Math.max(...allTimes) : 0;
+
         const chartWidth = (isSingleView ? 320 : 256) - 24 - 8; // panel_width - item_padding - border
-        const pressureChart = createSparklineSVG(typhoon.allFixes, 'p', currentTime, chartWidth, 60);
-        const windChart = createSparklineSVG(typhoon.allFixes, 'vmax', currentTime, chartWidth, 60);
+        const pressureChart = createSparklineSVG(typhoon.allFixes, 'p', currentTime, chartWidth, 60, overallMinTime, overallMaxTime);
+        const windChart = createSparklineSVG(typhoon.allFixes, 'vmax', currentTime, chartWidth, 60, overallMinTime, overallMaxTime);
 
         const name = typhoon.typhoon_name || `熱帶低氣壓 TD${typhoon.cwa_td_no}`;
         const cwa_name = typhoon.cwa_typhoon_name || '';
