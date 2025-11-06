@@ -699,13 +699,202 @@
   let selectedStormIndices = new Set();
   let activeTyphoonData = []; // Holds the parsed data for selected typhoons
   const probEnvelopesMap = new Map();
+  let allFnv3Tracks = [];
+  let selectedFnv3Indices = new Set();
+
+  function parseFnv3Data(json, csvText) {
+    allFnv3Tracks = [];
+    if (json) {
+        try {
+            if (!json || !Array.isArray(json) || json.length < 2 || !json[0] || !json[1] || !json[1].ensemble_track) {
+                console.error("FNV3.json has an unexpected format. Expected 'ensemble_track' property.", json);
+                return;
+            }
+            const initTime = json[0].init_time;
+            const members = json[1].ensemble_track;
+
+            members.forEach(member => {
+                if (!member || !member.systems || !Array.isArray(member.systems)) return;
+
+                member.systems.forEach(system => {
+                    if (!system || !system.track || !Array.isArray(system.track)) return;
+
+                    const track_points = system.track;
+                    const trackPath = track_points.map(p => {
+                        if (p && typeof p.wind !== 'undefined' && typeof p.longitude !== 'undefined' && typeof p.latitude !== 'undefined') {
+                            return { coords: [p.longitude, p.latitude], wind: p.wind };
+                        }
+                        return null;
+                    }).filter(p => p !== null);
+
+                    if (trackPath.length > 0) {
+                        allFnv3Tracks.push({
+                            id: `fnv3-json-${initTime}-m${member.member_id}-s${system.system_id}`,
+                            name: `FNV3-JSON M${member.member_id} S${system.system_id}`,
+                            source: 'json',
+                            system_id: system.system_id,
+                            path: trackPath
+                        });
+                    }
+                });
+            });
+        } catch(e) {
+            console.error("Error during FNV3 JSON parsing:", e);
+        }
+    }
+
+    if (csvText) {
+        try {
+            const parsedCsv = Papa.parse(csvText, { header: true, skipEmptyLines: true, comments: "#" });
+            const tracks = new Map();
+            if (parsedCsv.data && parsedCsv.data.length > 0) {
+                parsedCsv.data.forEach(row => {
+                    if (!row.track_id || !row.sample || !row.lon || !row.lat || !row.maximum_sustained_wind_speed_knots) {
+                        return;
+                    }
+                    const trackId = `${row.track_id}-${row.sample}`;
+                    if (!tracks.has(trackId)) {
+                        tracks.set(trackId, {
+                            id: `fnv3-csv-${trackId}`,
+                            name: `FNV3-CSV ${row.track_id} #${row.sample}`,
+                            source: 'csv',
+                            path: []
+                        });
+                    }
+                    tracks.get(trackId).path.push({ coords: [parseFloat(row.lon), parseFloat(row.lat)], wind: parseFloat(row.maximum_sustained_wind_speed_knots) });
+                });
+            }
+            allFnv3Tracks.push(...tracks.values());
+        } catch(e) {
+            console.error("Error during FNV3 CSV parsing:", e);
+        }
+    }
+  }
+
+  function populateFnv3Selector() {
+    const container = document.getElementById('fnv3Selector');
+    container.innerHTML = '';
+    const groupIndices = new Map();
+
+    for (let i = 0; i < allFnv3Tracks.length; i++) {
+        const track = allFnv3Tracks[i];
+        const index = i;
+        let groupName = 'Unknown Series';
+
+        if (track.path && track.path.length > 0 && track.path[0].coords) {
+            const startPoint = track.path[0].coords;
+            const lon = startPoint[0];
+            const lat = startPoint[1];
+            // Create a group name from the starting coordinates, rounded to 1 decimal place
+            groupName = `Series from ${lat.toFixed(1)}, ${lon.toFixed(1)}`;
+        }
+
+        if (!groupIndices.has(groupName)) {
+            groupIndices.set(groupName, []);
+        }
+        groupIndices.get(groupName).push(index);
+    }
+
+    console.log("Start-point Groups:", groupIndices);
+
+    groupIndices.forEach((indices, groupName) => {
+        const item = document.createElement('div');
+        item.className = 'list-item';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        const groupId = `cb-fnv3-group-${groupName.replace(/[^a-zA-Z0-9]/g, '-')}`;
+        cb.id = groupId;
+
+        const allSelected = indices.length > 0 && indices.every(idx => selectedFnv3Indices.has(idx));
+        cb.checked = allSelected;
+
+        cb.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                indices.forEach(idx => selectedFnv3Indices.add(idx));
+            } else {
+                indices.forEach(idx => selectedFnv3Indices.delete(idx));
+            }
+            updateFnv3Display();
+        });
+
+        const label = document.createElement('label');
+        label.textContent = groupName;
+        label.setAttribute('for', groupId);
+
+        item.appendChild(cb);
+        item.appendChild(label);
+        container.appendChild(item);
+    });
+  }
+
+  function getTyphoonIntensity(windSpeed) {
+    if (windSpeed >= 100) return 'SuperTY';
+    if (windSpeed >= 85) return 'STY';
+    if (windSpeed >= 64) return 'TY';
+    if (windSpeed >= 34) return 'TS';
+    return 'TD';
+  }
+
+  function updateFnv3Display() {
+    const lineSegments = [];
+    selectedFnv3Indices.forEach(index => {
+        const track = allFnv3Tracks[index];
+        if (!track || track.path.length < 2) return;
+
+        for (let i = 0; i < track.path.length - 1; i++) {
+            const startPoint = track.path[i];
+            const endPoint = track.path[i+1];
+
+            if (!startPoint || !endPoint || typeof startPoint.wind === 'undefined') continue;
+
+            lineSegments.push({
+                type: 'Feature',
+                properties: {
+                    intensity: getTyphoonIntensity(startPoint.wind)
+                },
+                geometry: {
+                    type: 'LineString',
+                    coordinates: [startPoint.coords, endPoint.coords]
+                }
+            });
+        }
+    });
+
+    if (map.getSource('fnv3-tracks')) {
+        map.getSource('fnv3-tracks').setData({
+            type: 'FeatureCollection',
+            features: lineSegments
+        });
+    }
+
+    const taiwanLayerId = 'tw-lines';
+    if (map.getLayer(taiwanLayerId)) {
+        if (selectedFnv3Indices.size > 0) {
+            map.moveLayer(taiwanLayerId);
+        }
+    }
+  }
 
   Promise.all([
     fetch('W-C0034-005.json').then(r => r.json()),
-    fetch('W-C0034-002.json').then(r => r.json()).catch(e => { console.error('Failed to load W-C0034-002.json', e); return null; })
-  ]).then(([mainJson, prob70Json]) => {
+    fetch('W-C0034-002.json').then(r => r.json()).catch(e => { console.error('Failed to load W-C0034-002.json', e); return null; }),
+    fetch('FNV3.json').then(r => r.json()).catch(e => { console.log('FNV3.json not found, skipping.'); return null; }),
+    fetch('FNV3_2025_10_02T18_00_paired.csv')
+        .then(r => {
+            if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
+            return r.text();
+        })
+        .catch(e => {
+            alert('無法讀取 FNV3_2025_10_02T18_00_paired.csv 檔案，將會略過。錯誤訊息：' + e.message);
+            return null;
+        })
+  ]).then(([mainJson, prob70Json, fnv3Json, fnv3CsvText]) => {
     allStorms = mainJson.cwaopendata.dataset.tropicalCyclones.tropicalCyclone;
     if(!Array.isArray(allStorms)) allStorms = [allStorms];
+
+    if (fnv3Json || fnv3CsvText) {
+        parseFnv3Data(fnv3Json, fnv3CsvText);
+    }
 
     if (prob70Json && prob70Json.features) {
         prob70Json.features.forEach(f => {
@@ -763,6 +952,7 @@
 
     map.on('load', () => {
         populateTyphoonSelector();
+        populateFnv3Selector();
         updateTyphoonDisplay();
     });
 
@@ -950,6 +1140,7 @@
       map.addSource('prob70Env',{type:'geojson',data:emptyFC});
       map.addSource('animated-rings',{type:'geojson',data:emptyFC});
       map.addSource('animated-point',{type:'geojson',data:emptyFC});
+      map.addSource('fnv3-tracks',{type:'geojson',data:emptyFC});
 
       fetch('https://api.exptech.dev/api/v1/tiles/radar/list')
         .then(res => res.json())
@@ -996,6 +1187,24 @@
       map.addLayer({id:'pts-current-label',type:'symbol',source:'pts-current',layout:{'text-field':['get','label'],'text-size':16,'text-font':['Noto Sans Regular'],'text-anchor':'center','text-offset':[0,-1.5],'text-allow-overlap':true,'visibility':'none'},paint:{'text-color':'#fff','text-halo-color':'rgba(0,0,0,.9)','text-halo-width':2.2}});
       map.addLayer({id:'pts-forecast',type:'circle',source:'pts-forecast',paint:{'circle-radius':6.5,'circle-color':'#ffffff','circle-stroke-color':'#a980ff','circle-stroke-width':2}});
       map.addLayer({id:'labels-forecast',type:'symbol',source:'pts-forecast',layout:{'text-field':['get','label'],'text-size':labelSize,'text-font':['Noto Sans Regular'],'text-anchor':'center','text-offset':[0,1.2],'text-allow-overlap':true},paint:{'text-color':'#fff','text-halo-color':'rgba(0,0,0,.9)','text-halo-width':1.2,'text-halo-blur':0.2}});
+      map.addLayer({
+        id: 'fnv3-track-lines',
+        type: 'line',
+        source: 'fnv3-tracks',
+        paint: {
+            'line-color': [
+                'case',
+                ['==', ['get', 'intensity'], 'TD'], '#00c8ff',
+                ['==', ['get', 'intensity'], 'TS'], '#00ff00',
+                ['==', ['get', 'intensity'], 'TY'], '#ffff00',
+                ['==', ['get', 'intensity'], 'STY'], '#ff8000',
+                ['==', ['get', 'intensity'], 'SuperTY'], '#ff0000',
+                '#ffffff' // default
+            ],
+            'line-width': 2,
+            'line-opacity': 0.8
+        }
+      });
 
       map.moveLayer('landfall-borders');
       map.moveLayer('interest-borders');
@@ -1822,8 +2031,7 @@
 
   function setTownFill(townsIn7,townsIn10){
     const townsIn10_literal=['literal',townsIn10.length>0?townsIn10:['']];
-    const townsIn7_literal=['literal',townsIn7.length>0?townsIn7:['']];
-    try{
+          const townsIn7_literal=['literal',(townsIn7 && townsIn7.length>0)?townsIn7:['']];    try{
       if(map.getLayer('town-fill'))
       map.setPaintProperty('town-fill','fill-color',[
         'case',
