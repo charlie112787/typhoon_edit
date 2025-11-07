@@ -341,6 +341,14 @@
       <div class="chip"><span class="sw sw-7f"></span><span>預測 7級（藍）</span></div>
       <div class="chip"><span class="sw sw-10f"></span><span>預測 10級（綠）</span></div>
     </div>
+    <div class="card legend">
+      <div style="width: 100%; font-size: 13px; font-weight: 700; color: var(--h4-color); margin-bottom: 4px;">FNV3 系集強度</div>
+      <div class="chip"><span class="sw" style="background:#00c8ff;"></span><span>TD</span></div>
+      <div class="chip"><span class="sw" style="background:#00ff00;"></span><span>TS</span></div>
+      <div class="chip"><span class="sw" style="background:#ffff00;"></span><span>TY</span></div>
+      <div class="chip"><span class="sw" style="background:#ff8000;"></span><span>STY</span></div>
+      <div class="chip"><span class="sw" style="background:#ff0000;"></span><span>SuperTY</span></div>
+    </div>
   </div>
 
   <div id="dashboard-panel" class="panel">
@@ -1201,7 +1209,7 @@
                 ['==', ['get', 'intensity'], 'SuperTY'], '#ff0000',
                 '#ffffff' // default
             ],
-            'line-width': 2,
+            'line-width': 1,
             'line-opacity': 0.8
         }
       });
