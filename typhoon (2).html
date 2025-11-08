@@ -876,9 +876,10 @@
     }
 
     const taiwanLayerId = 'tw-lines';
-    if (map.getLayer(taiwanLayerId)) {
+    const firstTyphoonLayerId = 'seg-light';
+    if (map.getLayer(taiwanLayerId) && map.getLayer(firstTyphoonLayerId)) {
         if (selectedFnv3Indices.size > 0) {
-            map.moveLayer(taiwanLayerId);
+            map.moveLayer(taiwanLayerId, firstTyphoonLayerId);
         }
     }
   }
@@ -1194,7 +1195,7 @@
       map.addLayer({id:'pts-current-circle',type:'circle',source:'pts-current',paint:{'circle-radius':8,'circle-color':'#a980ff','circle-stroke-color':'#fff','circle-stroke-width':2.5}});
       map.addLayer({id:'pts-current-label',type:'symbol',source:'pts-current',layout:{'text-field':['get','label'],'text-size':16,'text-font':['Noto Sans Regular'],'text-anchor':'center','text-offset':[0,-1.5],'text-allow-overlap':true,'visibility':'none'},paint:{'text-color':'#fff','text-halo-color':'rgba(0,0,0,.9)','text-halo-width':2.2}});
       map.addLayer({id:'pts-forecast',type:'circle',source:'pts-forecast',paint:{'circle-radius':6.5,'circle-color':'#ffffff','circle-stroke-color':'#a980ff','circle-stroke-width':2}});
-      map.addLayer({id:'labels-forecast',type:'symbol',source:'pts-forecast',layout:{'text-field':['get','label'],'text-size':labelSize,'text-font':['Noto Sans Regular'],'text-anchor':'center','text-offset':[0,1.2],'text-allow-overlap':true},paint:{'text-color':'#fff','text-halo-color':'rgba(0,0,0,.9)','text-halo-width':1.2,'text-halo-blur':0.2}});
+      map.addLayer({id:'labels-forecast',type:'symbol',source:'pts-forecast',layout:{'text-field':['get','label'],'text-size':labelSize,'text-font':['Noto Sans Bold'],'text-anchor':'center','text-offset':[0,1.2],'text-allow-overlap':true},paint:{'text-color':'#fff','text-halo-color':'rgba(0,0,0,.9)','text-halo-width':1.2,'text-halo-blur':0.2}});
       map.addLayer({
         id: 'fnv3-track-lines',
         type: 'line',
@@ -1213,6 +1214,7 @@
             'line-opacity': 0.8
         }
       });
+      map.moveLayer('fnv3-track-lines', 'seg-light');
 
       map.moveLayer('landfall-borders');
       map.moveLayer('interest-borders');
