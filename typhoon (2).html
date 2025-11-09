@@ -409,8 +409,8 @@
             const r7 = (pt1.r15 || 0) + ((pt2.r15 || 0) - (pt1.r15 || 0)) * t;
             const r10 = (pt1.r25 || 0) + ((pt2.r25 || 0) - (pt1.r25 || 0)) * t;
 
-            const r7_poly = r7 > 0 ? turf.polygon([circleLonLat(lon, lat, r7, 64)]) : null;
-            const r10_poly = r10 > 0 ? turf.polygon([circleLonLat(lon, lat, r10, 64)]) : null;
+            const r7_poly = r7 > 0 ? turf.polygon([circleLonLat(lon, lat, r7, 16)]) : null;
+            const r10_poly = r10 > 0 ? turf.polygon([circleLonLat(lon, lat, r10, 16)]) : null;
 
             for (const town of townFeatures) {
                 const townId = town.properties.CODE;
@@ -694,7 +694,7 @@
   };
 
   let labelsOn=true,enabledKeys=new Set(),currentTheme='dark';
-  let isAnimationMode=false,labelSize=30,map,isCameraLocked=false,townshipAnimationPlayer=null,animationSpeed=1;
+  let isAnimationMode=false,labelSize=30,map,isCameraLocked=false,animationSpeed=1;
   let animationState = { handle: null, animationStartTs: 0, pausedElapsed: 0, isPlaying: false, globalMinTime: null, globalMaxTime: null };
   let selectedCounties=new Set(), selectedInterestCounties = new Set();
   let allTownFeatures=[],sweptPolygons={r7:null,r10:null};
@@ -1126,15 +1126,15 @@
       map.once('idle', () => {
         if (map.getSource('map')) {
           const rawTownFeatures = map.querySourceFeatures('map', { sourceLayer: 'town' });
-          allTownFeatures = rawTownFeatures.map(f => {
-            const plainFeature = f.toJSON();
-            return {
-                type: 'Feature',
-                geometry: plainFeature.geometry,
-                properties: { CODE: plainFeature.properties.CODE }
-            };
-          });
-          townWorker.postMessage({ type: 'init', payload: { towns: allTownFeatures } });
+              allTownFeatures = rawTownFeatures.map(f => {
+                const plainFeature = f.toJSON();
+                const simplified = turf.simplify(plainFeature, { tolerance: 0.01, highQuality: false });
+                return {
+                    type: 'Feature',
+                    geometry: simplified.geometry,
+                    properties: { CODE: plainFeature.properties.CODE }
+                };
+              });          townWorker.postMessage({ type: 'init', payload: { towns: allTownFeatures } });
         }
       });
 
@@ -1440,9 +1440,10 @@
     const slider = document.getElementById('timeline-slider');
     let playPauseBtn = document.getElementById('play-pause-btn');
 
+    let lastTownUpdateTime = 0;
+    const townUpdateInterval = 300;
+
     if (animationState.handle) cancelAnimationFrame(animationState.handle);
-    if (townshipAnimationPlayer) clearInterval(townshipAnimationPlayer);
-    townshipAnimationPlayer = null;
     animationState.handle = null;
     animationState.isPlaying = false;
     animationState.pausedElapsed = 0;
@@ -1471,6 +1472,8 @@
     const totalDuration = 30000; // 30 seconds for the whole animation
 
     function animationLoop(timestamp) {
+        if (!lastTownUpdateTime) lastTownUpdateTime = timestamp;
+
         if (animationState.animationStartTs === 0) {
             animationState.animationStartTs = timestamp;
         }
@@ -1482,7 +1485,9 @@
         if (progress >= 1) {
             progress = 1;
             slider.value = slider.max;
-            updateTyphoonVisuals(new Date(parseInt(slider.max, 10)));
+            const finalTime = new Date(parseInt(slider.max, 10));
+            updateTyphoonVisuals(finalTime);
+            updateTownshipHighlightForAnimation(finalTime); // Final update
             playPauseBtn.click(); // Stop the animation
             return;
         }
@@ -1490,6 +1495,11 @@
         const timeMs = globalMinTime.getTime() + (globalMaxTime.getTime() - globalMinTime.getTime()) * progress;
         const now = new Date(timeMs);
         updateTyphoonVisuals(now);
+
+        if (timestamp - lastTownUpdateTime > townUpdateInterval) {
+            lastTownUpdateTime = timestamp;
+            updateTownshipHighlightForAnimation(now);
+        }
 
         animationState.handle = requestAnimationFrame(animationLoop);
     }
@@ -1511,8 +1521,6 @@
     playPauseBtn.addEventListener('click', () => {
       if (animationState.isPlaying) { // PAUSE
         cancelAnimationFrame(animationState.handle);
-        if (townshipAnimationPlayer) clearInterval(townshipAnimationPlayer);
-        townshipAnimationPlayer = null;
         animationState.handle = null;
         animationState.isPlaying = false;
         const currentRunTime = performance.now() - animationState.animationStartTs;
@@ -1528,6 +1536,7 @@
         if (startTimeMs >= parseInt(slider.max, 10)) { // If at the end, restart
             startTimeMs = parseInt(slider.min, 10);
             slider.value = String(startTimeMs);
+            lastTownUpdateTime = 0;
         }
 
         const timeRange = globalMaxTime.getTime() - globalMinTime.getTime();
@@ -1545,7 +1554,6 @@
         animationState.animationStartTs = performance.now();
 
         animationState.handle = requestAnimationFrame(animationLoop);
-        townshipAnimationPlayer = setInterval(() => updateTownshipHighlightForAnimation(new Date(parseInt(slider.value, 10))), 250);
       }
     });
   }
@@ -1553,19 +1561,16 @@
   function toggleAnimationMode(){
     isAnimationMode=!isAnimationMode;
     document.getElementById('btnAnimate').classList.toggle('active',isAnimationMode);
-    if(!isAnimationMode){
-        if (animationState.handle) cancelAnimationFrame(animationState.handle);
-        if (townshipAnimationPlayer) clearInterval(townshipAnimationPlayer);
-        townshipAnimationPlayer = null;
-        animationState.handle = null;
-        animationState.animationStartTs = 0;
-        animationState.pausedElapsed = 0;
-        animationState.isPlaying = false;
-        document.getElementById('play-pause-btn').textContent='播放';
-        setControlsDisabled(false);
-        setPlaybackUiVisibility(false); // Restore UI visibility
-    }
-    updateMapDisplay();
+      if(!isAnimationMode){
+          if (animationState.handle) cancelAnimationFrame(animationState.handle);
+          animationState.handle = null;
+          animationState.animationStartTs = 0;
+          animationState.pausedElapsed = 0;
+          animationState.isPlaying = false;
+          document.getElementById('play-pause-btn').textContent='播放';
+          setControlsDisabled(false);
+          setPlaybackUiVisibility(false); // Restore UI visibility
+      }    updateMapDisplay();
   }
 
   function updateMapDisplay(){
